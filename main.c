@@ -6,11 +6,11 @@
  * *******************************************/
 
 __asm__ (".code16gcc\n"
-    "call  dosmain\n"
+    "call  main\n"
     "mov   $0x4C,%ah\n"
     "int   $0x21\n");
 
-/*----------PREPROCESSOR----------*/
+/*;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; PREPROCESSOR ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;*/
 
 #define COM1_PORT 0x3F8
 #define VGA_RESX 320
@@ -27,6 +27,10 @@ __asm__ (".code16gcc\n"
 #define DMN_MVSPEED 3
 #define KBDDVORAK 1
 #define SONGTICKRT 3
+#define SERAPHX_START VGA_RESX/2-80
+#define SERAPHY_START VGA_RESY-100
+#define DMNX_START (I16RandRange(10,220))
+#define DMNY_START (-96-I16RandRange(10,50))
 
 /*monochromatic graphics*/
 #include "seraph.xbm"
@@ -42,23 +46,27 @@ typedef unsigned char u8;
 typedef unsigned int u16;
 typedef void vo;
 
-/*----------DATA STRUCTURES----------*/
+/*;;;;;;;;;;;;;;;;;;;;;;;;;;;;; DATA STRUCTURES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;*/
 
 typedef struct{
   i16 x;
   i16 y;
 }Entity;
 
-/*----------GLOBALS----------*/
+/*game state*/
+typedef struct{
+  Entity dmns[DMNS];
+  Entity fballs[BULLETS];
+  i16 fballptr;
+  i16 sx;
+  i16 sy;
+  u8 frame;
+  i16 songtick;
+}G;
 
-i16 i,j;
-Entity dmns[DMNS];
-Entity fballs[BULLETS];
-i16 fballptr = 0;
-i16 sx = VGA_RESX/2-80;
-i16 sy = VGA_RESY-100;
-u8 frame = 0;
-i16 songtick = 0;
+/*;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; GLOBALS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;*/
+
+G g;
 
 /*keyboard scancode tables*/
 #ifdef KBDQWERTY
@@ -75,6 +83,41 @@ u8 kbdmap[128]={0,27,'1','2','3','4','5','6','7',
   'j','k','x','b','m','w','v','z',0,'*',0,' ',0,0,0,0,0,0,0,0,0,0,
   0,0,0,0,0,0,'-',0,0,0,'+',0,0,0,0,0,0,0,0,0};
 #endif
+
+
+/*;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; PROTOTYPES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;*/
+
+i16 main(vo);
+static inline i16 Beep(i16 freq);
+static inline i16 DistCheb(int x0, int y0, int x1, int y1);
+static inline i16 GetOracle(vo);
+static inline i16 I16RandRange(i16 min, i16 max);
+static inline i8 GetKey(vo);
+static inline i8* Int2Str(i16 num, i8* string);
+static inline u8 InB(i16 port);
+static inline vo BeepOff(vo);
+static inline vo DrawFireball(int x, int y);
+static inline vo FireBall();
+static inline vo GrClear(u8 col);
+static inline vo GrDrawXBM(u8 xbm[], i16 xpos, i16 ypos, i16 width, i16 height);
+static inline vo GrFlip();
+static inline vo GrPutPx(i16 x, i16 y, u8 col);
+static inline vo OutB(u8 value, i16 port);
+static inline vo PutChar(i16 c);
+static inline vo Puts(i8 *string);
+static inline vo SerialPuts(u8* msg);
+static inline vo SerialWrite(u8 data);
+static inline vo SetCursorPos(i16 x, i16 y);
+static inline vo SetTextColour(i16 fg, i16 bg);
+static inline vo Shutdown(vo);
+static inline vo Sleep(i16 time);
+static inline vo TextClear(vo);
+static inline vo Vga(vo);
+static inline vo VgaClear(i16 col);
+static inline vo VgaOff(vo);
+static inline vo VgaPutPx(i16 x, i16 y, u8 vgacol);
+
+/*;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; FUNCTIONS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;*/
 
 /*----------FUNCTIONS----------*/
 
@@ -100,6 +143,8 @@ static inline u8 InB(i16 port){
 
 /*********************************************
  * Description - Put string text
+ * Strings must end with a "$", otherwise mojibake
+ * will flood the screen.
  * Author - Vilyaem
  * Date - May 12 2024
  * *******************************************/
@@ -146,6 +191,7 @@ static inline i16 Beep(i16 freq){
   if (tmp != (tmp | 3)) {
     OutB(0x61, tmp | 3);
   }
+  return div;
 }
 
 /*********************************************
@@ -193,11 +239,11 @@ static inline vo TextClear(vo){
 static inline vo SetCursorPos(i16 x, i16 y){
   /*Set X and Y*/
   __asm__ volatile(
-      "mov $0x02,%ah\n"
-      "mov $0x00,%bh\n"
-      "mov $0x00,%dh\n"
-      "mov $0x00,%dl\n" 
+      "mov $0x02,%%ah\n"
+      "mov $0x00,%%bh\n"
       "int $0x10\n"     
+      :
+      : "d"( (y << 8) | x ) /*At last.*/
       );
 }
 
@@ -314,7 +360,7 @@ static inline vo Sleep(i16 time){
 }
 
 /*********************************************
- * Description - Convert i16egers into strings
+ * Description - Convert integers into strings
  * Author - Vilyaem
  * Date - May 14 2024
  * *******************************************/
@@ -363,8 +409,8 @@ static inline vo SerialWrite(u8 data){
  * Author - Vilyaem
  * Date - May 15 2024
  * *******************************************/
-static inline vo SerialPuts(u8 msg[]){
-  for(i = 0; msg[i] != '$';++i){
+static inline vo SerialPuts(u8* msg){
+  for(i16 i = 0; msg[i] != '$';++i){
     SerialWrite(msg[i]);
   }
   SerialWrite('\n');
@@ -460,11 +506,11 @@ static inline i16 DistCheb(int x0, int y0, int x1, int y1){
  * Date - May 17 2024
  * *******************************************/
 static inline vo FireBall(){
-  fballs[fballptr].x = sx + 75;
-  fballs[fballptr].y = sy + 20;
-  ++fballptr;
-  if(fballptr >= BULLETS){
-    fballptr = 0;
+  g.fballs[g.fballptr].x = g.sx + 75;
+  g.fballs[g.fballptr].y = g.sy + 20;
+  ++g.fballptr;
+  if(g.fballptr >= BULLETS){
+    g.fballptr = 0;
   }
 }
 
@@ -476,7 +522,7 @@ static inline vo FireBall(){
 static inline vo DrawFireball(int x, int y){
   i16 size = y / 2;
   if(size >= 1){
-    for(j = 0; j != 64;++j){
+    for(i16 j = 0; j != 64;++j){
       GrPutPx(x+I16RandRange(0,size),y+I16RandRange(0,size),FG_COL);
       GrPutPx(x-I16RandRange(0,size),y+I16RandRange(0,size),FG_COL);
       GrPutPx(x+I16RandRange(0,size),y-I16RandRange(0,size),FG_COL);
@@ -490,23 +536,33 @@ static inline vo DrawFireball(int x, int y){
  * Author - Vilyaem
  * Date - May 12 2024
  * *******************************************/
-i16 dosmain(vo){
+i16 main(vo){
 
-
-  u8 sstr[] = { 'V','I','L','Y','A','E','M','$'};
-  SerialPuts(sstr);
+  u8 msg[] = "Seraphim, a x86 16-bit shooter by Vilyaem, Public Domain, CC0 "
+             "(Creative Commons Zero)$";
+  SerialPuts(msg);
 
   /*Init*/
   Vga();
 
-  for(i = 0; i != DMNS;++i){
-    dmns[i].x = I16RandRange(10,220);
-    dmns[i].y = -96-I16RandRange(10,50); 
+  g = (G){
+    {{0}},
+    {{0}},
+    0,
+    SERAPHX_START,
+    SERAPHY_START,
+    0,
+    0
+  };
+
+  for(i16 i = 0; i != DMNS;++i){
+    g.dmns[i].x = DMNX_START;
+    g.dmns[i].y = DMNY_START;
   }
 
-  for(i = 0; i != BULLETS;++i){
-    fballs[i].x = 0;
-    fballs[i].y = -40;
+  for(i16 i = 0; i != BULLETS;++i){
+    g.fballs[i].x = 0;
+    g.fballs[i].y = -40;
   }
 
   while(1){
@@ -515,33 +571,33 @@ i16 dosmain(vo){
 
 
     /*Handle and draw demons*/
-    for(i = 0; i != DMNS;++i){
-      dmns[i].y += DMN_MVSPEED;
-      if(dmns[i].y > 600){
-        dmns[i].y = -96-I16RandRange(10,50);
-        dmns[i].x = I16RandRange(10,220);
+    for(i16 i = 0; i != DMNS;++i){
+      g.dmns[i].y += DMN_MVSPEED;
+      if(g.dmns[i].y > 600){
+        g.dmns[i].x = DMNX_START;
+        g.dmns[i].y = DMNY_START;
       }
-      for(j = 0; j != DMNS;++j){
-        if(DistCheb(dmns[i].x,dmns[i].y,fballs[j].x,fballs[i].y) <= 80){
-          dmns[i].y = -96-I16RandRange(10,50);
-          dmns[i].x = I16RandRange(10,220);
+      for(i16 j = 0; j != BULLETS;++j){
+        if(DistCheb(g.dmns[i].x,g.dmns[i].y,g.fballs[j].x,g.fballs[i].y) <= 80){
+          g.dmns[i].x = DMNX_START;
+          g.dmns[i].y = DMNY_START;
         }
       }
-      if(dmns[i].y >= -40){
-        GrDrawXBM(dmn_bits,dmns[i].x,dmns[i].y,dmn_width,dmn_height);
+      if(g.dmns[i].y >= -40){
+        GrDrawXBM(dmn_bits,g.dmns[i].x,g.dmns[i].y,dmn_width,dmn_height);
       }
     }
 
     /*Handle and draw fireballs*/
-    for(i = 0; i != fballptr;++i){
-      if(fballs[i].y >= -40){
-        fballs[i].y -= DMN_MVSPEED;
-        DrawFireball(fballs[i].x,fballs[i].y);
+    for(i16 i = 0; i != g.fballptr;++i){
+      if(g.fballs[i].y >= -40){
+        g.fballs[i].y -= DMN_MVSPEED;
+        DrawFireball(g.fballs[i].x,g.fballs[i].y);
       }
     }
-
+    
     /*Draw player*/
-    GrDrawXBM(seraph_bits,sx,sy,seraph_width,seraph_height);
+    GrDrawXBM(seraph_bits,g.sx,g.sy,seraph_width,seraph_height);
 
 
     /*Paint to VGA Memory*/
@@ -549,10 +605,10 @@ i16 dosmain(vo){
 
     /*Input*/
     switch(GetKey()){
-      case ',': sy -= SERAPH_MVSPEED;break;
-      case 'a': sx -= SERAPH_MVSPEED;break;
-      case 'e': sx += SERAPH_MVSPEED;break;
-      case 'o': sy += SERAPH_MVSPEED;break;
+      case ',': g.sy -= SERAPH_MVSPEED;break;
+      case 'a': g.sx -= SERAPH_MVSPEED;break;
+      case 'e': g.sx += SERAPH_MVSPEED;break;
+      case 'o': g.sy += SERAPH_MVSPEED;break;
       case ' ': FireBall();break;
       case 'x': Shutdown();break;
       default:Beep(100);BeepOff();break;
@@ -563,17 +619,17 @@ i16 dosmain(vo){
     /*Keep the player in bounds
       like a magnet, they can obviously
       still fly away*/
-    if(sy < 0-3){
-      sy += 3;
+    if(g.sy < 0-3){
+      g.sy += 3;
     }
-    else if(sy > VGA_RESY-64){
-      sy -= 3;
+    else if(g.sy > VGA_RESY-64){
+      g.sy -= 3;
     }
-    else if(sx < 0-3){
-      sx += 3;
+    else if(g.sx < 0-3){
+      g.sx += 3;
     }
-    else if(sx > VGA_RESY+3){
-      sx -= 3;
+    else if(g.sx > VGA_RESY+3){
+      g.sx -= 3;
     }
 
   }

@@ -3,7 +3,7 @@ BITS 16
 org 0x7c00
 mov ax, 0
 mov es, ax
-mov ah, 0x02   ; Read Sectors From Drive
+mov ah, 0x02   ; read Sectors From Drive
 mov al, 8      ; sector count
 mov ch, 0      ; cylinder
 mov cl, 2      ; sector
